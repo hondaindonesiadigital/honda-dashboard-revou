@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { serviceRoleKey } from './service-role-key'
 import { createHmac, timingSafeEqual } from 'crypto'
 import { cookies } from 'next/headers'
 
@@ -23,7 +24,7 @@ function authSecret(): string {
 export function makeAuthClient() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_SUPABASE_SERVICE_ROLE_KEY!,
+    serviceRoleKey(),
   )
 }
 
