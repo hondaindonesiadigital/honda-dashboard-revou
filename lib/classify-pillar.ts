@@ -9,7 +9,18 @@ import type { PillarResult } from './pillar-config'
 export { VALID_PILLARS } from './pillar-config'
 export type { PillarResult } from './pillar-config'
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+// Lazily constructed. The OpenAI SDK throws on a missing key the moment it is
+// instantiated, and `next build` imports this module while collecting page data
+// for the routes that use it — so building at module scope makes every build
+// depend on OPENAI_API_KEY being present, even though the key is only ever
+// needed at request time. Creating the client on first call keeps the build
+// green and lets each route's own `OPENAI_API_KEY` guard return a clean 500.
+let _openai: OpenAI | null = null
+
+function getOpenAI(): OpenAI {
+  if (!_openai) _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  return _openai
+}
 
 export const PILLAR_KEYWORDS: Record<string, string[]> = {
   'Product Value & Information': [
@@ -73,7 +84,7 @@ export async function classifyByCaptionAI(caption: string): Promise<PillarResult
   // unclassifiable by text. Route to Others (caller should have tried vision first).
   if (!caption?.trim()) return 'Others'
   const definitions = await getPillarDefinitions()
-  const response = await openai.chat.completions.create({
+  const response = await getOpenAI().chat.completions.create({
     model: 'gpt-4o-mini',
     max_tokens: 50,
     temperature: 0,
@@ -101,7 +112,7 @@ export async function classifyWithCombinedAnalysis(
 ): Promise<PillarResult> {
   const { base64, mediaType } = await fetchImageAsBase64(imageUrl)
   const definitions = await getPillarDefinitions()
-  const response = await openai.chat.completions.create({
+  const response = await getOpenAI().chat.completions.create({
     model: 'gpt-4o-mini',
     max_tokens: 50,
     temperature: 0,
