@@ -46,7 +46,9 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           # Optional: override the classifier model (provider-specific id).
-          CLASSIFY_MODEL: ${{ vars.CLASSIFY_MODEL }}
+          # Accepts either a repository variable or a secret, so it works
+          # whichever way it was added in the repo settings.
+          CLASSIFY_MODEL: ${{ vars.CLASSIFY_MODEL || secrets.CLASSIFY_MODEL }}
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
           NEXT_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
