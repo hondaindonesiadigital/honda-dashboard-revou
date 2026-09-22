@@ -6,7 +6,7 @@
  *
  *   Phase 1 — Scrape   (Apify discovery actor → upsert instagram_posts, NO classify)
  *   Phase 2 — Refresh  (Apify api scraper → refresh likes/comments/views + thumbnail)
- *   Phase 3 — Classify (OpenAI gpt-4o-mini combined-vision → caption-ai fallback)
+ *   Phase 3 — Classify (OpenRouter/OpenAI combined-vision → caption-ai fallback)
  *
  * It runs on GitHub Actions (6h timeout, single process), so unlike the Supabase
  * Edge Functions it needs no chunk cursor and never hits the 546 WORKER_LIMIT.
@@ -14,7 +14,7 @@
  *
  * Config comes from process.env (GitHub injects secrets as env vars — this
  * script does NOT read .env files):
- *   APIFY_TOKEN, OPENAI_API_KEY, NEXT_PUBLIC_SUPABASE_URL,
+ *   APIFY_TOKEN, OPENROUTER_API_KEY (or OPENAI_API_KEY), NEXT_PUBLIC_SUPABASE_URL,
  *   NEXT_SUPABASE_SERVICE_ROLE_KEY, and (optional) NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
  *   TRIGGER ('manual' | 'schedule'), GITHUB_RUN_ID.
  *
@@ -25,6 +25,7 @@
  */
 
 import { createClient } from '@supabase/supabase-js'
+import { hasAIKey, classifyModel } from '@/lib/ai-client'
 import { loadEnabledAccounts, runUpdateForAccounts } from '@/lib/run-update'
 import { refreshMetrics, countRefreshable, CHUNK_SIZE as REFRESH_CHUNK } from '@/lib/refresh-metrics'
 import { classifyUnclassified, countUnclassified } from '@/lib/run-update'
@@ -43,7 +44,11 @@ function requireEnv(name: string): string {
 const SUPABASE_URL = requireEnv('NEXT_PUBLIC_SUPABASE_URL')
 const SERVICE_ROLE_KEY = requireEnv('NEXT_SUPABASE_SERVICE_ROLE_KEY')
 requireEnv('APIFY_TOKEN')
-requireEnv('OPENAI_API_KEY')
+// Either provider key works — see lib/ai-client.ts.
+if (!hasAIKey()) {
+  console.error('Missing required env var: OPENROUTER_API_KEY (or OPENAI_API_KEY)')
+  process.exit(1)
+}
 
 const TRIGGER: 'manual' | 'schedule' =
   process.env.TRIGGER === 'manual' ? 'manual' : 'schedule'
@@ -152,7 +157,7 @@ async function phaseRefresh(): Promise<void> {
 }
 
 async function phaseClassify(): Promise<number> {
-  log('Phase 3 — Classify new posts (gpt-4o-mini)')
+  log(`Phase 3 — Classify new posts (${classifyModel()})`)
   await persist({ phase: 'classify' })
 
   let totalClassified = 0

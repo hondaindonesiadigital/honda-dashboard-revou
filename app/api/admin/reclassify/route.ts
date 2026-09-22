@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { revalidatePath } from 'next/cache'
 import { makeSupabase } from '@/lib/run-update'
 import { classifyPillar } from '@/lib/classify-pillar'
+import { hasAIKey } from '@/lib/ai-client'
 import { guardAdmin } from '@/lib/admin-route'
 
 // Standalone admin trigger: re-run vision classification on posts currently
@@ -24,8 +25,11 @@ export async function POST() {
   const denied = await guardAdmin()
   if (denied) return denied
 
-  if (!process.env.OPENAI_API_KEY) {
-    return NextResponse.json({ error: 'OPENAI_API_KEY not set' }, { status: 500 })
+  if (!hasAIKey()) {
+    return NextResponse.json(
+      { error: 'No AI provider key set — expected OPENROUTER_API_KEY or OPENAI_API_KEY' },
+      { status: 500 },
+    )
   }
 
   const supabase = makeSupabase()

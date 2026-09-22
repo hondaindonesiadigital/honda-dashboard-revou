@@ -1,10 +1,14 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { classifyPillar } from '@/lib/classify-pillar'
+import { hasAIKey } from '@/lib/ai-client'
 
 export async function POST() {
-  if (!process.env.OPENAI_API_KEY) {
-    return NextResponse.json({ error: 'OPENAI_API_KEY not set' }, { status: 500 })
+  if (!hasAIKey()) {
+    return NextResponse.json(
+      { error: 'No AI provider key set — expected OPENROUTER_API_KEY or OPENAI_API_KEY' },
+      { status: 500 },
+    )
   }
 
   const supabase = createClient(
