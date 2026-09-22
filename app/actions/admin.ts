@@ -297,8 +297,12 @@ export async function classifyChunk(): Promise<ClassifyChunkResult> {
 // server-side (this is a server action) — never shipped to the browser.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// owner/repo of the Actions workflow to dispatch. Overridable via env for forks.
-const GITHUB_REPO = process.env.GITHUB_UPDATE_REPO ?? 'marketingrevou/honda-dashboard-revou'
+// owner/repo of the Actions workflow to dispatch. This must be the repo that
+// holds .github/workflows/update.yml AND the Actions secrets the run needs —
+// dispatching at the wrong owner 404s even with a valid PAT. Overridable via
+// env for forks.
+const GITHUB_REPO =
+  process.env.GITHUB_UPDATE_REPO ?? 'hondaindonesiadigital/honda-dashboard-revou'
 const GITHUB_WORKFLOW_FILE = 'update.yml'
 // Branch the workflow runs on. The repo's default branch is `master`.
 const GITHUB_REF = process.env.GITHUB_UPDATE_REF ?? 'master'
