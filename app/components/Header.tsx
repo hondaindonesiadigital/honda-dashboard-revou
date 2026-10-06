@@ -42,6 +42,12 @@ export default function Header({ dateFrom, dateTo, minDate, maxDate, accountCoun
           <span className="meta-chip text-white" style={{ background: '#333333' }}>
             {postCount} Posts
           </span>
+          <Link
+            href="/ratecard"
+            style={{ fontSize: '12px', color: '#E62533', fontWeight: 600, padding: '2px 4px', textDecoration: 'none' }}
+          >
+            KOL Ratecard
+          </Link>
           {isAdmin && (
             <Link
               href="/admin"
