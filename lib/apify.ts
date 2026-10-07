@@ -31,8 +31,12 @@ export const DISCOVERY_ACTOR = 'instagram-scraper/instagram-profile-posts-scrape
 
 /**
  * The Apify API tokens to use, in priority order: APIFY_TOKEN first, then
- * APIFY_TOKEN_2, _3, _4, … auto-discovered from the environment (no fixed list —
- * add APIFY_TOKEN_7 as a secret/env var and it's picked up with no code change).
+ * APIFY_TOKEN_2, _3, _4, … auto-discovered from whatever is in the environment
+ * (no fixed list here). Where the runtime injects every env var it has — Vercel,
+ * a local .env — adding APIFY_TOKEN_7 is picked up with no code change. GitHub
+ * Actions is the exception: it only passes secrets a workflow names explicitly,
+ * so a new token ALSO has to be added to the env block in
+ * .github/workflows/update.yml or the run never sees it.
  * Blank/unset ones are skipped. Multiple tokens let a run fail over to another
  * account when one hits its Apify MONTHLY USAGE HARD LIMIT (see runActor /
  * isQuotaExhaustedError).
