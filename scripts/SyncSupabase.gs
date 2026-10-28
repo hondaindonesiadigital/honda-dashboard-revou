@@ -21,9 +21,11 @@
  * to wipe the tab and leave a fraction of the rows behind. Three changes stop
  * that happening again:
  *
- *   1. Paging is driven by the row count Supabase reports in the Content-Range
- *      header, not by the length of a page, so a short page no longer ends the
- *      loop early.
+ *   1. Paging stops only on an EMPTY page, never on a short one, and the offset
+ *      advances by the number of rows actually received. Supabase trims
+ *      responses that are too large or slow to build, so a short page is
+ *      routine and must not be read as the end of the data. Where the
+ *      Content-Range header gives a total, that is used as the finish line too.
  *   2. The fetch is sanity-checked against the previous successful sync. If it
  *      comes back with less than SAFETY_RATIO of last time's rows, the script
  *      THROWS and the sheet is left completely untouched.
@@ -51,6 +53,10 @@ const ORDER = 'post_date.desc';          // newest posts first
 // something went wrong upstream — better to keep yesterday's complete sheet
 // than to overwrite it with a partial one. Set to 0 to disable the check.
 const SAFETY_RATIO = 0.9;
+
+// Hard stop so a misbehaving endpoint can never loop forever. At PAGE_SIZE 500
+// this allows 100k rows, far above the real dataset.
+const MAX_PAGES = 200;
 
 const LAST_COUNT_KEY = 'lastSyncedRowCount';
 
@@ -85,6 +91,7 @@ function fetchAllRows() {
   const rows = [];
   let offset = 0;
   let total = null;
+  let pages = 0;
 
   while (true) {
     const url =
@@ -115,15 +122,26 @@ function fetchAllRows() {
     }
 
     const batch = JSON.parse(res.getContentText());
-    if (batch.length === 0) break;        // nothing left
+
+    // An EMPTY page is the only thing that means "no more rows". A SHORT page
+    // does not: Supabase trims a response that is too large or too slow to
+    // build, and captions make that common. Treating short as final is what
+    // truncated the sheet to 375, then to 616 (500 + a trimmed 116). We keep
+    // asking from wherever we got to and stop only when a page comes back with
+    // nothing in it.
+    if (batch.length === 0) break;
 
     for (let i = 0; i < batch.length; i++) rows.push(batch[i]);
-    offset += batch.length;
+    offset += batch.length;                // advance by what we ACTUALLY got
+    pages++;
 
-    if (total !== null) {
-      if (rows.length >= total) break;    // got everything Supabase said exists
-    } else if (batch.length < PAGE_SIZE) {
-      break;                              // fallback: no count header available
+    if (total !== null && rows.length >= total) break;
+
+    if (pages > MAX_PAGES) {
+      throw new Error(
+        'Gave up after ' + MAX_PAGES + ' requests with ' + rows.length +
+        ' rows. Sheet left untouched. Lower PAGE_SIZE or drop the caption column.'
+      );
     }
   }
 
