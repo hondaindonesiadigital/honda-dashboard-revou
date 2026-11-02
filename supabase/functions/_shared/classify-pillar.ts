@@ -108,17 +108,22 @@ export async function classifyPillar(
   caption: string,
   imageUrl: string | null,
 ): Promise<{ pillar: PillarResult; source: 'combined-vision' | 'caption-ai' }> {
-  // No caption → Others, unconditionally (don't attempt classification).
-  if (!caption?.trim()) return { pillar: 'Others', source: 'caption-ai' }
-
+  // Try vision whenever there is an image, INCLUDING when the caption is empty.
+  // An empty caption means the text tells us nothing — it does not mean the post
+  // is unclassifiable, and a dealer's promo poster is often entirely legible from
+  // the image. The combined prompt already labels a missing caption as
+  // "(tidak ada caption)", so the model is told what it is looking at.
   if (imageUrl) {
     try {
       const pillar = await classifyWithCombinedAnalysis(supabase, caption, imageUrl)
       return { pillar, source: 'combined-vision' }
     } catch {
-      // image fetch or vision call failed — fall through to caption-only
+      // image fetch or vision call failed — fall through
     }
   }
+
+  // Nothing left to read: no usable image, and no caption either.
+  if (!caption?.trim()) return { pillar: 'Others', source: 'caption-ai' }
 
   const pillar = await classifyByCaptionAI(supabase, caption)
   return { pillar, source: 'caption-ai' }
