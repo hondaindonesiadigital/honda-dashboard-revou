@@ -46,7 +46,16 @@ export function isQuotaExhaustedError(err: unknown): boolean {
     msg.includes('monthly usage hard limit') ||
     msg.includes('usage hard limit exceeded') ||
     (msg.includes('hard limit') && msg.includes('exceed')) ||
-    msg.includes('upgrade your subscription')
+    msg.includes('upgrade your subscription') ||
+    // Wording Apify switched to on the Free plan (seen in run #25):
+    //   "You've used the $5.00 of monthly usage included in the Free plan, so
+    //    Actor runs and other Apify services are blocked until your monthly
+    //    usage cycle resets ... upgrade at
+    //    https://console.apify.com/billing/subscription"
+    // Not one of the phrases above appears in it.
+    msg.includes('monthly usage cycle resets') ||
+    msg.includes('monthly usage included in the') ||
+    msg.includes('billing/subscription')
   )
 }
 

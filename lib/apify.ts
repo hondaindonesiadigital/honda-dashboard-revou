@@ -64,8 +64,12 @@ export function makeApify(token?: string) {
 /**
  * True when an Apify error is the account's monthly usage hard limit (not a
  * transient failure). That message means retrying on the SAME token is futile —
- * the only recovery is a different account's token. Matched loosely because the
- * exact wording varies ("Monthly usage hard limit exceeded", plan-limit variants).
+ * the only recovery is a different account's token.
+ *
+ * Matched loosely because Apify rewords this and a miss is expensive: run #25
+ * aborted on token #1 with five funded tokens untried, because the account's
+ * Free-plan message shares no phrase with the older "hard limit" wording. Both
+ * generations are matched here; keep the old ones, accounts differ.
  */
 export function isQuotaExhaustedError(err: unknown): boolean {
   const msg = String(err instanceof Error ? err.message : err).toLowerCase()
@@ -73,7 +77,16 @@ export function isQuotaExhaustedError(err: unknown): boolean {
     msg.includes('monthly usage hard limit') ||
     msg.includes('usage hard limit exceeded') ||
     (msg.includes('hard limit') && msg.includes('exceed')) ||
-    msg.includes('upgrade your subscription')
+    msg.includes('upgrade your subscription') ||
+    // Wording Apify switched to on the Free plan (seen in run #25):
+    //   "You've used the $5.00 of monthly usage included in the Free plan, so
+    //    Actor runs and other Apify services are blocked until your monthly
+    //    usage cycle resets ... upgrade at
+    //    https://console.apify.com/billing/subscription"
+    // Not one of the phrases above appears in it.
+    msg.includes('monthly usage cycle resets') ||
+    msg.includes('monthly usage included in the') ||
+    msg.includes('billing/subscription')
   )
 }
 
