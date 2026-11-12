@@ -1,0 +1,68 @@
+# Keep the Supabase project awake.
+#
+# The database sits on Supabase's Free plan, which pauses a project after a
+# stretch with no activity. A paused project refuses every request, and the
+# dashboard renders that as "No data yet" because its queries discard the
+# error — so an outage looks exactly like an empty database. That is what
+# happened in early November: the dashboard was blank for days while the
+# Google Sheet still held all 14,902 rows, and three days went into finding
+# out why.
+#
+# One cheap read a day is enough to count as activity, so the project never
+# reaches the pause threshold. It costs one request and a few seconds.
+#
+# The step FAILS on a non-200, on purpose: GitHub emails the repository owner
+# on a failed scheduled run, so a database that is already down is reported
+# the next morning instead of being discovered from a blank dashboard.
+#
+# This does not replace update.yml — that one scrapes and classifies weekly.
+# This only keeps the lights on in between.
+
+name: Keep Supabase awake
+
+on:
+  schedule:
+    - cron: '17 22 * * *' # daily 22:17 UTC (= 05:17 WIB)
+  workflow_dispatch:
+
+concurrency:
+  group: supabase-keepalive
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping Supabase REST
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_PUBLISHABLE_KEY:-}" ]; then
+            echo "::error::SUPABASE_URL or SUPABASE_PUBLISHABLE_KEY secret is not set."
+            exit 1
+          fi
+
+          # Smallest possible read: one id, one row. Enough to count as activity.
+          url="${SUPABASE_URL%/}/rest/v1/instagram_posts?select=post_id&limit=1"
+
+          # --max-time guards a project that is mid-restore and hanging.
+          code=$(curl -sS -o /tmp/ping.json -w '%{http_code}' --max-time 60 \
+                   -H "apikey: ${SUPABASE_PUBLISHABLE_KEY}" \
+                   -H "Authorization: Bearer ${SUPABASE_PUBLISHABLE_KEY}" \
+                   "$url") || {
+            echo "::error::Could not reach Supabase at all (curl failed). The project is likely paused or deleted."
+            exit 1
+          }
+
+          if [ "$code" != "200" ]; then
+            echo "::error::Supabase answered HTTP $code — the project is not serving requests."
+            echo "Response body:"
+            cat /tmp/ping.json || true
+            exit 1
+          fi
+
+          echo "Supabase is awake (HTTP 200)."
