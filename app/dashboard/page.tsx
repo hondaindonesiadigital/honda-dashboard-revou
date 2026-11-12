@@ -1,5 +1,8 @@
 import { getInstagramAccounts, getTopPosts, getTrendData, getLatestPostDate } from '@/lib/instagram-data'
 import type { DateRange } from '@/lib/instagram-data'
+import type { InstagramAccount, Post, TrendRawPost } from '@/lib/types'
+import { describeDataError } from '@/lib/data-error'
+import DataErrorBanner from '../components/DataErrorBanner'
 import Header from '../components/Header'
 import PostsSection from '../components/PostsSection'
 import InstagramSection from '../components/InstagramSection'
@@ -7,6 +10,7 @@ import TrendSection from '../components/TrendSection'
 import Footer from '../components/Footer'
 import { logout } from '@/app/actions/auth'
 import { getCurrentUser } from '@/lib/auth-db'
+import type { DashboardUser } from '@/lib/auth-db'
 
 const MIN_DATE = '2026-05-18'
 
@@ -73,12 +77,35 @@ export default async function DashboardPage({
   const topRange: DateRange = { from: lastTwoWeeks.from, to: lastTwoWeeks.to }
   const topDateLabel = formatDateLabel(lastTwoWeeks.from, lastTwoWeeks.to)
 
-  const [instagramAccounts, topPosts, trendPosts, currentUser] = await Promise.all([
-    getInstagramAccounts(dateRange),
-    getTopPosts(topRange),
-    getTrendData(dateRange),
-    getCurrentUser(),
-  ])
+  // The three data reads throw DataUnavailableError when Supabase does not
+  // answer, instead of returning [] — otherwise an outage is indistinguishable
+  // from an empty database, which is what kept the dashboard silently blank
+  // for days in early November. Catch it here so the page still renders, with
+  // a banner that says what actually went wrong.
+  let instagramAccounts: InstagramAccount[] = []
+  let topPosts: Post[] = []
+  let trendPosts: TrendRawPost[] = []
+  let dataError: { headline: string; hint: string; detail: string } | null = null
+
+  try {
+    ;[instagramAccounts, topPosts, trendPosts] = await Promise.all([
+      getInstagramAccounts(dateRange),
+      getTopPosts(topRange),
+      getTrendData(dateRange),
+    ])
+  } catch (err) {
+    dataError = describeDataError(err)
+    console.error('[dashboard] data read failed:', err)
+  }
+
+  // Only decides whether the admin link shows. The proxy has already verified
+  // the session, so a database hiccup here must not take the whole page down.
+  let currentUser: DashboardUser | null = null
+  try {
+    currentUser = await getCurrentUser()
+  } catch (err) {
+    console.error('[dashboard] could not load the current user:', err)
+  }
 
   const totalPosts = instagramAccounts.reduce((s, a) => s + a.post_count, 0)
 
@@ -107,9 +134,15 @@ export default async function DashboardPage({
         isAdmin={currentUser?.is_admin ?? false}
       />
       <main className="max-w-screen-xl mx-auto px-6 pb-16">
-        <InstagramSection accounts={instagramAccounts} dateLabel={dateLabel} dateFrom={from} dateTo={to} />
-        <TrendSection posts={trendPosts} dateLabel={dateLabel} />
-        <PostsSection posts={topPosts} dateLabel={topDateLabel} />
+        {dataError ? (
+          <DataErrorBanner {...dataError} />
+        ) : (
+          <>
+            <InstagramSection accounts={instagramAccounts} dateLabel={dateLabel} dateFrom={from} dateTo={to} />
+            <TrendSection posts={trendPosts} dateLabel={dateLabel} />
+            <PostsSection posts={topPosts} dateLabel={topDateLabel} />
+          </>
+        )}
       </main>
       <Footer />
     </>

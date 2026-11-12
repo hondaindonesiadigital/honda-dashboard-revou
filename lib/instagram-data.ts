@@ -1,5 +1,6 @@
 import { cacheLife } from 'next/cache'
 import { supabase } from './supabase'
+import { DataUnavailableError, throwIfUnavailable } from './data-error'
 import type { InstagramAccount, PillarLabel, Post, PostFormat, TrendRawPost } from './types'
 
 export interface DateRange {
@@ -12,18 +13,34 @@ export interface DateRange {
 // get the full result set instead of a silently-truncated first 1000 rows.
 const PAGE_SIZE = 1000
 
+/**
+ * Throws DataUnavailableError if any page fails, rather than returning what it
+ * managed to read alongside an `error` the caller is free to ignore — which is
+ * exactly what every caller used to do, turning an outage into "No data yet".
+ * A partial result is not returned either: half a dataset renders as a real
+ * number and is worse than an error.
+ */
 async function fetchAllRows<T>(
+  source: string,
   build: () => { range: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }> },
-): Promise<{ data: T[]; error: unknown }> {
+): Promise<T[]> {
   const all: T[] = []
   for (let offset = 0; ; offset += PAGE_SIZE) {
-    const { data, error } = await build().range(offset, offset + PAGE_SIZE - 1)
-    if (error) return { data: all, error }
+    let data: T[] | null
+    let error: unknown
+    try {
+      ;({ data, error } = await build().range(offset, offset + PAGE_SIZE - 1))
+    } catch (thrown) {
+      // supabase-js reports most failures as `error`, but a dead socket or DNS
+      // failure rejects instead. Both mean the same thing here.
+      throw new DataUnavailableError(source, thrown)
+    }
+    throwIfUnavailable(source, error)
     if (!data?.length) break
     all.push(...data)
     if (data.length < PAGE_SIZE) break
   }
-  return { data: all, error: null }
+  return all
 }
 
 function typeToFormat(type: string | null): PostFormat {
@@ -51,7 +68,7 @@ export async function getLatestPostDate(): Promise<string | null> {
 export async function getTopPosts(dateRange: DateRange): Promise<Post[]> {
   'use cache'
   cacheLife('max')
-  const { data: posts } = await fetchAllRows<{
+  const posts = await fetchAllRows<{
     post_id: string
     account_username: string
     thumbnail_url: string | null
@@ -63,7 +80,7 @@ export async function getTopPosts(dateRange: DateRange): Promise<Post[]> {
     post_type: string | null
     pillar: string | null
     post_url: string | null
-  }>(() => {
+  }>('instagram_posts', () => {
     let q = supabase
       .from('instagram_posts')
       .select('post_id, account_username, thumbnail_url, caption, likes_count, comments_count, views_count, post_date, post_type, pillar, post_url')
@@ -132,14 +149,14 @@ export async function getTopPosts(dateRange: DateRange): Promise<Post[]> {
 export async function getTrendData(dateRange: DateRange): Promise<TrendRawPost[]> {
   'use cache'
   cacheLife('max')
-  const { data: posts } = await fetchAllRows<{
+  const posts = await fetchAllRows<{
     post_date: string | null
     likes_count: number | null
     views_count: number | null
     comments_count: number | null
     pillar: string | null
     account_username: string
-  }>(() => {
+  }>('instagram_posts', () => {
     let q = supabase
       .from('instagram_posts')
       .select('post_date, likes_count, views_count, comments_count, pillar, account_username')
@@ -151,9 +168,10 @@ export async function getTrendData(dateRange: DateRange): Promise<TrendRawPost[]
 
   if (!posts?.length) return []
 
-  const { data: accounts } = await supabase
+  const { data: accounts, error: accErr } = await supabase
     .from('instagram_accounts')
     .select('username, main_dealer, dealer_name')
+  throwIfUnavailable('instagram_accounts', accErr)
 
   const accountMap = new Map((accounts ?? []).map((a) => [a.username, a]))
 
@@ -186,7 +204,9 @@ export async function getInstagramAccounts(dateRange: DateRange): Promise<Instag
     .select('username, full_name, profile_picture_url, followers_count, main_dealer, dealer_name')
     .order('username')
 
-  if (accErr || !accounts?.length) return []
+  throwIfUnavailable('instagram_accounts', accErr)
+  // A reachable but genuinely empty account list is not an error.
+  if (!accounts?.length) return []
 
   type AccountPost = {
     account_username: string
@@ -197,7 +217,7 @@ export async function getInstagramAccounts(dateRange: DateRange): Promise<Instag
     pillar: string | null
     thumbnail_url: string | null
   }
-  const { data: posts, error: postErr } = await fetchAllRows<AccountPost>(() => {
+  const posts = await fetchAllRows<AccountPost>('instagram_posts', () => {
     let q = supabase
       .from('instagram_posts')
       .select(
@@ -209,10 +229,8 @@ export async function getInstagramAccounts(dateRange: DateRange): Promise<Instag
     return q
   })
 
-  if (postErr) return []
-
-  const postsByAccount = new Map<string, typeof posts>()
-  for (const p of posts ?? []) {
+  const postsByAccount = new Map<string, AccountPost[]>()
+  for (const p of posts) {
     const list = postsByAccount.get(p.account_username) ?? []
     list.push(p)
     postsByAccount.set(p.account_username, list)

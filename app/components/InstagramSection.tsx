@@ -323,9 +323,10 @@ export default function InstagramSection({ accounts, dateLabel, dateFrom, dateTo
         </div>
         <div className="flex items-center justify-center py-16 bg-white" style={{ border: '1px solid #E5E7EB' }}>
           <div className="text-center">
-            <p className="font-roboto font-bold" style={{ fontSize: '20px', color: '#E62533' }}>No data yet</p>
-            <p className="font-mulish mt-1" style={{ fontSize: '11px', color: '#9CA3AF' }}>
-              Run: <code style={{ background: '#F0F0F0', padding: '2px 6px', fontSize: '10px' }}>node --env-file=.env.local scripts/scrape.mjs</code>
+            <p className="font-roboto font-bold" style={{ fontSize: '20px', color: '#E62533' }}>No posts in this date range</p>
+            <p className="font-mulish mt-1" style={{ fontSize: '12px', color: '#555555' }}>
+              The database answered, it just has nothing between these two dates. Try widening the
+              range at the top of the page.
             </p>
           </div>
         </div>
