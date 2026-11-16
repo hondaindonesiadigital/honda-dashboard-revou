@@ -11,6 +11,14 @@ on:
       trigger:
         description: How the run was started (recorded in update_runs.trigger)
         default: manual
+      backfill_from:
+        description: >-
+          ONE-OFF HISTORY BACKFILL. Leave empty for a normal incremental run.
+          A date (YYYY-MM-DD) pulls EVERY account back to it instead of to its
+          newest stored post, so the actor refetches months of history. Costs
+          many times a normal run in Apify quota and in AI classification, and
+          must not be older than POST_DATE_CUTOFF_STR in lib/run-update.ts.
+        default: ''
   schedule:
     - cron: '0 1 * * 1' # every Monday 01:00 UTC (= 08:00 WIB)
 
@@ -22,7 +30,9 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # 120 is ample for the weekly incremental run; a backfill pages through
+    # months of history for every account and needs the headroom.
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -62,4 +72,7 @@ jobs:
           NEXT_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           # workflow_dispatch → the input; schedule → no input, so default to 'schedule'.
           TRIGGER: ${{ github.event.inputs.trigger || 'schedule' }}
+          # Empty on a scheduled run, so the Monday job always stays incremental
+          # and can never trigger a backfill by accident.
+          BACKFILL_FROM: ${{ github.event.inputs.backfill_from }}
           GITHUB_RUN_ID: ${{ github.run_id }}

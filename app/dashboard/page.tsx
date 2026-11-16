@@ -12,7 +12,9 @@ import { logout } from '@/app/actions/auth'
 import { getCurrentUser } from '@/lib/auth-db'
 import type { DashboardUser } from '@/lib/auth-db'
 
-const MIN_DATE = '2026-05-18'
+// Earliest date the dashboard offers. Matches POST_DATE_CUTOFF_STR in
+// lib/run-update.ts — the floor the pipeline refuses to store below.
+const MIN_DATE = '2026-01-01'
 
 function getYesterday(): string {
   const d = new Date()

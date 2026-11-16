@@ -65,13 +65,16 @@ const POSTS_PER_ACCOUNT = 12
 // Campaign-window floor. Accounts never scraped before start here; the dashboard
 // only covers posts on/after this date, and it's also the oldest `newerThan` we
 // ever send so old posts never enter the DB.
-const POST_DATE_CUTOFF_STR = '2026-05-18'
+//
+// Moved from 2026-05-18 to 2026-01-01. Lowering it alone backfills nothing for
+// an account that already has posts — see backfillFrom() below for why.
+const POST_DATE_CUTOFF_STR = '2026-01-01'
 
 // Hard floor for post dates. The discovery actor returns each account's most
 // recent N posts regardless of age, so low-volume dealers drag in posts from
-// years ago. The dashboard only covers the campaign window starting 2026-05-18,
+// years ago. The dashboard only covers the campaign window starting 2026-01-01,
 // so anything older is dropped before it ever reaches the DB.
-const POST_DATE_CUTOFF = new Date('2026-05-18T00:00:00Z')
+const POST_DATE_CUTOFF = new Date('2026-01-01T00:00:00Z')
 
 /**
  * Accounts processed per cron invocation. The discovery actor
@@ -81,6 +84,64 @@ const POST_DATE_CUTOFF = new Date('2026-05-18T00:00:00Z')
  * is covered across ceil(155/40) = 4 runs.
  */
 export const CHUNK_SIZE = 40
+
+/**
+ * One-off history backfill, switched on by the BACKFILL_FROM env var
+ * (YYYY-MM-DD). Off by default: unset, every run behaves exactly as before.
+ *
+ * Why this is needed at all. The normal scrape is incremental — each account's
+ * `newerThan` is the date of its NEWEST stored post, so the actor stops as soon
+ * as it reaches familiar ground. That makes the weekly run cheap, and it also
+ * means lowering POST_DATE_CUTOFF_STR backfills nothing: an account holding
+ * posts up to November still gets newerThan=November and never looks further
+ * back. The floor only ever applies to accounts with no stored posts at all.
+ *
+ * So a backfill has to override the per-account cutoff outright. With
+ * BACKFILL_FROM set, every account is given that date instead and the actor
+ * pages back to it.
+ *
+ * Two knobs come with it, because the incremental defaults are wrong for a deep
+ * fetch:
+ *
+ *   postsPerProfile caps pagination. At 12 — right for a week of posts — a
+ *   backfill would return 12 posts per account and look like it had worked.
+ *   BACKFILL_POSTS_PER_ACCOUNT raises the ceiling.
+ *
+ *   CHUNK_SIZE (40) sizes one actor run. Forty accounts x ten months is a very
+ *   large single run, and if it fails the whole slice is lost. Backfill batches
+ *   are smaller, so a failure costs less and progress shows in the log.
+ */
+const BACKFILL_POSTS_PER_ACCOUNT = Number(process.env.BACKFILL_POSTS_PER_ACCOUNT ?? 500)
+const BACKFILL_CHUNK_SIZE = Number(process.env.BACKFILL_CHUNK_SIZE ?? 10)
+
+/** The backfill start date, or null for a normal incremental run. */
+export function backfillFrom(): string | null {
+  const raw = process.env.BACKFILL_FROM?.trim()
+  if (!raw) return null
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    throw new Error(`BACKFILL_FROM must be YYYY-MM-DD, got "${raw}"`)
+  }
+  if (raw < POST_DATE_CUTOFF_STR) {
+    // Scraping them would cost quota and then POST_DATE_CUTOFF would throw the
+    // rows away — a silent, expensive no-op. Fail loudly instead.
+    throw new Error(
+      `BACKFILL_FROM (${raw}) is older than the hard floor POST_DATE_CUTOFF_STR ` +
+        `(${POST_DATE_CUTOFF_STR}). Those posts would be scraped and then dropped. ` +
+        `Lower POST_DATE_CUTOFF_STR first.`,
+    )
+  }
+  return raw
+}
+
+/** Pagination ceiling per account: deep while backfilling, shallow otherwise. */
+export function postsPerProfile(): number {
+  return backfillFrom() ? BACKFILL_POSTS_PER_ACCOUNT : POSTS_PER_ACCOUNT
+}
+
+/** Accounts per actor run: smaller while backfilling. */
+export function scrapeChunkSize(): number {
+  return backfillFrom() ? BACKFILL_CHUNK_SIZE : CHUNK_SIZE
+}
 
 /** Number of cron runs needed to cover the full ACCOUNTS list. */
 export function chunkCount(): number {
@@ -119,6 +180,12 @@ export async function loadLastPostDates(
   supabase: Supabase,
   accounts: string[],
 ): Promise<Map<string, string>> {
+  // Backfill mode ignores what is already stored: every account is pulled back
+  // to the same date. Without this the function hands back November for almost
+  // every account and the backfill fetches nothing.
+  const forced = backfillFrom()
+  if (forced) return new Map(accounts.map((u) => [u, forced]))
+
   const inScope = new Set(accounts)
   // Track the max post_date DATE seen per account across all pages.
   const latest = new Map<string, string>()
@@ -286,7 +353,7 @@ async function processBatch(
     // group's last stored day are returned (postsPerProfile caps runaway pagination).
     const raw = await runActor(DISCOVERY_ACTOR, {
       instagramUsernames: usernames,
-      postsPerProfile: POSTS_PER_ACCOUNT,
+      postsPerProfile: postsPerProfile(),
       ...(options.newerThan && { onlyPostsNewerThan: options.newerThan }),
     })
     items = raw.map(normalizeDiscoveryItem)
@@ -614,9 +681,10 @@ export async function runUpdateForAccounts(
   // A single cutoff group could exceed CHUNK_SIZE; sub-chunk so one actor run
   // never gets an unbounded username list. Flatten to (newerThan, slice) batches.
   const batches: { newerThan: string; slice: string[] }[] = []
+  const chunk = scrapeChunkSize()
   for (const [cutoff, list] of groups) {
-    for (let i = 0; i < list.length; i += CHUNK_SIZE) {
-      batches.push({ newerThan: cutoff, slice: list.slice(i, i + CHUNK_SIZE) })
+    for (let i = 0; i < list.length; i += chunk) {
+      batches.push({ newerThan: cutoff, slice: list.slice(i, i + chunk) })
     }
   }
 
