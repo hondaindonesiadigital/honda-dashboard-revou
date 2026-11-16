@@ -29,6 +29,7 @@ import { hasAIKey, classifyModel } from '@/lib/ai-client'
 import { loadEnabledAccounts, runUpdateForAccounts } from '@/lib/run-update'
 import { refreshMetrics, countRefreshable, CHUNK_SIZE as REFRESH_CHUNK } from '@/lib/refresh-metrics'
 import { classifyUnclassified, countUnclassified } from '@/lib/run-update'
+import { isQuotaExhaustedError } from '@/lib/apify'
 
 // ── env ──────────────────────────────────────────────────────────────────────
 
@@ -202,10 +203,53 @@ async function main() {
   log(`Update run starting (trigger=${TRIGGER}, github_run_id=${GITHUB_RUN_ID ?? 'n/a'})`)
   await createRun()
 
+  // Phases 1 and 2 need Apify; phase 3 needs only the AI provider and the
+  // database. When every Apify token is spent, aborting the run strands the
+  // posts already in the database with no pillar — which is exactly what
+  // happened after the January backfill: 15,215 unclassified rows, and the
+  // next run died in Phase 2 before classification was ever reached, so
+  // topping up AI credit changed nothing.
+  //
+  // A spent quota is expected (free accounts, monthly reset), recoverable and
+  // unrelated to classification, so it skips the phase instead of ending the
+  // run. Any other error still aborts: it may be a real fault, and carrying on
+  // would bury it. The run is still reported as failed and exits non-zero —
+  // quota exhaustion needs attention — but only after the work that could be
+  // done has been done.
+  const skipped: string[] = []
+
+  async function withoutApify<T>(
+    phase: string,
+    run: () => Promise<T>,
+    fallback: T,
+  ): Promise<T> {
+    try {
+      return await run()
+    } catch (err) {
+      if (!isQuotaExhaustedError(err)) throw err
+      skipped.push(phase)
+      log(`  Every Apify token is out of monthly quota — skipping ${phase}.`)
+      log('  Continuing to classification, which does not use Apify.')
+      return fallback
+    }
+  }
+
   try {
-    const postsAdded = await phaseScrape()
-    await phaseRefresh()
+    const postsAdded = await withoutApify('Phase 1 (scrape)', phaseScrape, 0)
+    await withoutApify('Phase 2 (refresh)', phaseRefresh, undefined)
     const classified = await phaseClassify()
+
+    if (skipped.length) {
+      const msg = `Apify quota exhausted — skipped ${skipped.join(' and ')}`
+      log(`Update finished with gaps ✗ (${msg}; ${classified} classified)`)
+      await persist({
+        status: 'failed',
+        error: msg,
+        phase: 'done',
+        finished_at: new Date().toISOString(),
+      })
+      process.exit(1)
+    }
 
     log(`Update complete ✓ (${postsAdded} posts added, ${classified} classified)`)
     await persist({
