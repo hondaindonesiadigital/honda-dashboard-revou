@@ -87,6 +87,52 @@ const COLUMNS = [
  * Returns { rows, total } where `total` is the count Supabase reported, or
  * null if it did not report one.
  */
+/**
+ * One GET, retrying a 5xx a few times before giving up.
+ *
+ * A Postgres statement timeout surfaces as HTTP 500 with code 57014
+ * ("canceling statement due to statement timeout"). It is load-dependent, so
+ * the same request often succeeds a moment later. Without this, one slow
+ * moment anywhere in ~75 requests killed the whole sync — which is how the
+ * sync failed at ~37,500 rows.
+ */
+function fetchOnce(url, headers) {
+  let waitMs = 2000;
+  for (let attempt = 1; ; attempt++) {
+    const res = UrlFetchApp.fetch(url, {
+      method: 'get',
+      headers: headers,
+      muteHttpExceptions: true,
+    });
+    // 206 Partial Content is normal once a count is requested.
+    const code = res.getResponseCode();
+    if (code === 200 || code === 206) return res;
+
+    if (code < 500 || attempt > 3) {
+      throw new Error('Supabase REST error ' + code + ': ' + res.getContentText());
+    }
+    Utilities.sleep(waitMs);
+    waitMs *= 2;
+  }
+}
+
+/**
+ * Page through the view newest-first.
+ *
+ * Paging advances by the number of rows ACTUALLY received, never by PAGE_SIZE.
+ * That is what makes it safe against Supabase trimming a response it finds too
+ * large or slow to build — common here, because captions are long. A cursor
+ * (`post_date <= last seen`) was tried instead and rejected: with a trimmed
+ * page it cannot tell "the data ended" from "the server held some back", and a
+ * simulated run silently lost 137 of 12,000 rows. This loop cannot, because a
+ * short page just means the next request starts where this one stopped.
+ *
+ * What DID change after the 57014 timeout: `Prefer: count=exact` used to be
+ * sent on every page, so Postgres counted the whole joined view once per
+ * request — about 75 times per sync, each count scanning every row. It is
+ * asked for once now, on the first request, which is all the completeness
+ * check below needs.
+ */
 function fetchAllRows() {
   const rows = [];
   let offset = 0;
@@ -101,21 +147,14 @@ function fetchAllRows() {
       '&limit=' + PAGE_SIZE +
       '&offset=' + offset;
 
-    const res = UrlFetchApp.fetch(url, {
-      method: 'get',
-      headers: {
-        apikey: SUPABASE_ANON_KEY,
-        Authorization: 'Bearer ' + SUPABASE_ANON_KEY,
-        Prefer: 'count=exact',
-      },
-      muteHttpExceptions: true,
-    });
+    const headers = {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: 'Bearer ' + SUPABASE_ANON_KEY,
+    };
+    // Counting the view is expensive; ask on the first request only.
+    if (pages === 0) headers.Prefer = 'count=exact';
 
-    // 206 Partial Content is normal once a count is requested.
-    const code = res.getResponseCode();
-    if (code !== 200 && code !== 206) {
-      throw new Error('Supabase REST error ' + code + ': ' + res.getContentText());
-    }
+    const res = fetchOnce(url, headers);
 
     if (total === null) {
       total = parseTotalFromContentRange(res.getAllHeaders());
@@ -124,11 +163,8 @@ function fetchAllRows() {
     const batch = JSON.parse(res.getContentText());
 
     // An EMPTY page is the only thing that means "no more rows". A SHORT page
-    // does not: Supabase trims a response that is too large or too slow to
-    // build, and captions make that common. Treating short as final is what
-    // truncated the sheet to 375, then to 616 (500 + a trimmed 116). We keep
-    // asking from wherever we got to and stop only when a page comes back with
-    // nothing in it.
+    // does not: treating short as final is what truncated the sheet to 375,
+    // then to 616 (500 + a trimmed 116).
     if (batch.length === 0) break;
 
     for (let i = 0; i < batch.length; i++) rows.push(batch[i]);
